@@ -1,0 +1,153 @@
+{
+  "canvasWidth": 50,
+  "canvasHeight": 40,
+  "characters": [
+    {
+      "imagePosition": "center",
+      "id": "1",
+      "name": "Wei Wuxian",
+      "pronunciation": "Way Woo-shyen",
+      "titles": [
+        "Yiling Patriarch"
+      ],
+      "nicknames": [
+        "Wei Ying"
+      ],
+      "gridX": 10,
+      "gridY": 10,
+      "image": "",
+      "symbols": [
+        "⚔️",
+        "🌙"
+      ],
+      "statusSymbol": "💀",
+      "bio": "Brilliant cultivator who created demonic cultivation",
+      "sect": "yunmeng"
+    },
+    {
+      "imagePosition": "center",
+      "id": "2",
+      "name": "Lan Wangji",
+      "pronunciation": "Lan Wong-jee",
+      "titles": [
+        "Hanguang-Jun"
+      ],
+      "nicknames": [
+        "Lan Zhan"
+      ],
+      "gridX": 25,
+      "gridY": 10,
+      "image": "",
+      "symbols": [
+        "🎵",
+        "❄️"
+      ],
+      "statusSymbol": "",
+      "bio": "Righteous cultivator of the Lan Clan",
+      "sect": "gusulan"
+    }
+  ],
+  "connections": [
+    {
+      "id": "c1",
+      "from": "1",
+      "to": "2",
+      "type": "love",
+      "startSide": "right",
+      "endSide": "left",
+      "waypoints": [
+        {
+          "x": 397,
+          "y": 280
+        }
+      ],
+      "labels": [
+        {
+          "id": "start",
+          "segmentIndex": 0,
+          "t": 0.1,
+          "side": "auto"
+        },
+        {
+          "id": "end",
+          "segmentIndex": 0,
+          "t": 0.9,
+          "side": "auto"
+        }
+      ]
+    }
+  ],
+  "legend": {
+    "lines": {
+      "love": {
+        "color": "#ff1493",
+        "style": "solid",
+        "thickness": 3,
+        "label": "Love"
+      },
+      "family": {
+        "color": "#ff0000",
+        "style": "solid",
+        "thickness": 2,
+        "label": "Family"
+      },
+      "rivalry": {
+        "color": "#ff8c00",
+        "style": "dashed",
+        "thickness": 2,
+        "label": "Rivalry"
+      },
+      "friendship": {
+        "color": "#00ff00",
+        "style": "solid",
+        "thickness": 2,
+        "label": "Friendship"
+      },
+      "mentor": {
+        "color": "#9370db",
+        "style": "solid",
+        "thickness": 2,
+        "label": "Mentor/Student"
+      }
+    },
+    "symbols": {
+      "⚔️": "Warrior",
+      "🎵": "Musician",
+      "🌙": "Demonic Cultivation",
+      "❄️": "Ice/Cold Affinity",
+      "🔥": "Fire Affinity",
+      "💚": "Healer",
+      "👑": "Royalty"
+    },
+    "statusSymbols": {
+      "💀": "Deceased",
+      "👻": "Ghost",
+      "🧟": "Undead",
+      "💤": "Sleeping/Dormant",
+      "🏥": "Injured",
+      "⚡": "Powered Up"
+    },
+    "sects": {
+      "gusulan": {
+        "name": "Gusu Lan Clan",
+        "color": "#3b82f6"
+      },
+      "yunmeng": {
+        "name": "Yunmeng Jiang Clan",
+        "color": "#a855f7"
+      },
+      "qinghe": {
+        "name": "Qinghe Nie Clan",
+        "color": "#22c55e"
+      },
+      "lanling": {
+        "name": "Lanling Jin Clan",
+        "color": "#eab308"
+      },
+      "qishan": {
+        "name": "Qishan Wen Clan",
+        "color": "#ef4444"
+      }
+    }
+  }
+}
