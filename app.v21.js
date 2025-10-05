@@ -28,7 +28,7 @@ const EDIT_PASSWORD = 'changeme123'; // CHANGE THIS PASSWORD!
 
 // Angle hint configuration (helps find clean 0/45/90/etc. while dragging)
 const ANGLE_GUIDES = [0, 45, 90, 135, 180, 225, 270, 315];
-const ANGLE_TOLERANCE_DEG = 6; // show a guide when the segment is within ±6°
+const ANGLE_TOLERANCE_DEG = 1; // show a guide when the segment is within ±1°
 const HINT_LINE_LENGTH = 2000; // long enough to span the canvas
 
 const initialData = {
@@ -100,7 +100,7 @@ const initialData = {
       '👻': 'Ghost',
       '🧟': 'Undead',
       '💤': 'Sleeping/Dormant',
-      '🏥': 'Injured',
+      '🥀': 'Injured',
       '⚡': 'Powered Up'
     },
     sects: {
@@ -197,14 +197,19 @@ function AuthModal({ onAuthenticate, onClose }) {
 
 function CharacterTile({
   character,
-  onClick,
   isEditing,
   onDragStart,
   isHighlighted,
   isDimmed,
-  sectColor
+  sectColor,
+  onClick,
+  isSelected = false,
+  onPrimarySelect,
+  onToggleSelect,
+  dragOffset,
+  onMouseDownStart
 }) {
-  const bannerHeight = 40; // Height of name/title banner
+  const bannerHeight = 40;
   const imageHeight = TILE_HEIGHT - bannerHeight;
 
   const getObjectPosition = (position) => {
@@ -228,15 +233,25 @@ function CharacterTile({
       } transition-all ${
         isHighlighted ? 'z-20 scale-110' : isDimmed ? 'opacity-30' : 'opacity-100'
       }`,
-      style: {
-        left: character.gridX * GRID_SIZE,
-        top: character.gridY * GRID_SIZE,
-        width: TILE_WIDTH,
-        height: TILE_HEIGHT
+      style: { 
+        left: character.gridX * GRID_SIZE, 
+        top: character.gridY * GRID_SIZE, 
+        width: TILE_WIDTH, 
+        height: TILE_HEIGHT, 
+        transform: dragOffset ? `translate(${dragOffset.dx}px, ${dragOffset.dy}px)` : undefined 
       },
-      onClick,
-      draggable: isEditing,
-      onDragStart
+      onClick: (e) => {
+        e.stopPropagation();
+        if (e.shiftKey || e.metaKey || e.ctrlKey) {
+          onToggleSelect && onToggleSelect();
+        } else if (onPrimarySelect) {
+          onPrimarySelect();
+        } else if (onClick) {
+          onClick(e);
+        }
+      },
+      onMouseDown: onMouseDownStart,
+      draggable: false
     },
     React.createElement(
       'div',
@@ -244,9 +259,15 @@ function CharacterTile({
         className: `relative w-full h-full border-2 ${
           isHighlighted
             ? 'border-yellow-400 shadow-lg shadow-yellow-400/50'
+            : isSelected
+            ? 'border-blue-400 shadow-lg shadow-blue-400/30'
             : 'border-gray-700'
         } rounded-lg overflow-hidden bg-gray-800 ${
-          isHighlighted ? 'ring-4 ring-yellow-400/50' : ''
+          isHighlighted
+            ? 'ring-4 ring-yellow-400/50'
+            : isSelected
+            ? 'ring-2 ring-blue-400/30'
+            : ''
         }`
       },
       React.createElement(
@@ -323,12 +344,6 @@ function CharacterTile({
   );
 }
 
-/**
- * ConnectionLine
- * Now supports multiple labels per connection (connection.labels[]).
- * Each label: { id, segmentIndex, t, side }
- * side ∈ {'auto','top','bottom','left','right'}
- */
 function ConnectionLine({
   connection,
   characters,
@@ -349,25 +364,39 @@ function ConnectionLine({
   const lineStyle =
     legend.lines[connection.type] || { color: '#ffffff', style: 'solid', thickness: 2 };
 
-  const getConnectionPoint = (char, side) => {
+  const getConnectionPoint = (char, side, offset = 0.5) => {
     const baseX = char.gridX * GRID_SIZE + TILE_WIDTH / 2;
     const baseY = char.gridY * GRID_SIZE + TILE_HEIGHT / 2;
+    const clampedOffset = Math.max(0, Math.min(1, offset));
+    
     switch (side) {
       case 'top':
-        return { x: baseX, y: char.gridY * GRID_SIZE };
+        return { 
+          x: char.gridX * GRID_SIZE + TILE_WIDTH * clampedOffset, 
+          y: char.gridY * GRID_SIZE 
+        };
       case 'bottom':
-        return { x: baseX, y: char.gridY * GRID_SIZE + TILE_HEIGHT };
+        return { 
+          x: char.gridX * GRID_SIZE + TILE_WIDTH * clampedOffset, 
+          y: char.gridY * GRID_SIZE + TILE_HEIGHT 
+        };
       case 'left':
-        return { x: char.gridX * GRID_SIZE, y: baseY };
+        return { 
+          x: char.gridX * GRID_SIZE, 
+          y: char.gridY * GRID_SIZE + TILE_HEIGHT * clampedOffset 
+        };
       case 'right':
-        return { x: char.gridX * GRID_SIZE + TILE_WIDTH, y: baseY };
+        return { 
+          x: char.gridX * GRID_SIZE + TILE_WIDTH, 
+          y: char.gridY * GRID_SIZE + TILE_HEIGHT * clampedOffset 
+        };
       default:
         return { x: baseX, y: baseY };
     }
   };
 
-  const start = getConnectionPoint(fromChar, connection.startSide || 'right');
-  const end = getConnectionPoint(toChar, connection.endSide || 'left');
+  const start = getConnectionPoint(fromChar, connection.startSide || 'right', connection.startOffset ?? 0.5);
+  const end = getConnectionPoint(toChar, connection.endSide || 'left', connection.endOffset ?? 0.5);
   const waypoints = connection.waypoints || [];
   const allPoints = [start, ...waypoints, end];
 
@@ -382,7 +411,6 @@ function ConnectionLine({
       : 'none';
   const isSelected = selectedConnection === connection.id;
 
-  // --- Angle hint helpers ---
   const toDeg = (rad) => ((rad * 180) / Math.PI + 360) % 360;
   const toRad = (deg) => (deg * Math.PI) / 180;
   const angleBetween = (a, b) => toDeg(Math.atan2(b.y - a.y, b.x - a.x));
@@ -399,12 +427,6 @@ function ConnectionLine({
       { guide: 0, diff: 999 }
     );
 
-  /**
-   * Build translucent, dashed "hint lines" for segments that are currently
-   * within ANGLE_TOLERANCE_DEG of a tidy angle (0/45/90/etc.). These display
-   * while editing and make it easier to visually "land" on the clean angle
-   * without forcing a snap.
-   */
   const renderAngleHints = () => {
     if (!isEditing || !isSelected) return null;
     const elems = [];
@@ -423,7 +445,6 @@ function ConnectionLine({
         const x2 = midX + ux * HINT_LINE_LENGTH;
         const y2 = midY + uy * HINT_LINE_LENGTH;
 
-        // Hint line
         elems.push(
           React.createElement('line', {
             key: `hint-line-${connection.id}-${i}`,
@@ -431,25 +452,22 @@ function ConnectionLine({
             y1,
             x2,
             y2,
-            stroke: 'rgba(56,189,248,0.6)', // cyan-400 @ ~60%
+            stroke: 'rgba(56,189,248,0.6)',
             strokeWidth: 1,
-            strokeDasharray: '3,6',
-            pointerEvents: 'none'
+            strokeDasharray: '3,6'
           })
         );
-
-        // Angle badge near the midpoint
         elems.push(
           React.createElement(
             'g',
-            { key: `hint-badge-${connection.id}-${i}`, pointerEvents: 'none' },
+            { key: `hint-badge-${connection.id}-${i}` },
             React.createElement('rect', {
               x: midX + 8,
               y: midY - 10,
               width: 34,
               height: 16,
               rx: 3,
-              fill: 'rgba(17,24,39,0.85)', // gray-900 with opacity
+              fill: 'rgba(17,24,39,0.85)',
               stroke: 'rgba(56,189,248,0.6)',
               strokeWidth: 1
             }),
@@ -458,7 +476,7 @@ function ConnectionLine({
               {
                 x: midX + 25,
                 y: midY + 2,
-                fill: 'rgba(191,219,254,0.95)', // blue-100-ish
+                fill: 'rgba(191,219,254,0.95)',
                 fontSize: 10,
                 textAnchor: 'middle'
               },
@@ -468,15 +486,14 @@ function ConnectionLine({
         );
       }
     }
-    return elems;
+    return React.createElement('g', { pointerEvents: 'none' }, elems);
   };
 
-  // --- Label helpers ---
   const labelText = `${fromChar.name} → ${toChar.name}`;
-  const estimateTextWidth = (text) => Math.max(40, text.length * 6); // conservative estimate
-  const LABEL_HEIGHT = 16; // px
-  const LABEL_PADDING_X = 4; // px each side
-  const EDGE_OFFSET = 5; // distance from line to the nearest edge of the label box
+  const estimateTextWidth = (text) => Math.max(40, text.length * 6);
+  const LABEL_HEIGHT = 16;
+  const LABEL_PADDING_X = 4;
+  const EDGE_OFFSET = 5;
 
   const pointOnSegment = (a, b, t) => ({
     x: a.x + (b.x - a.x) * t,
@@ -489,7 +506,6 @@ function ConnectionLine({
 
   const defaultLabels = () => {
     const lastSeg = Math.max(0, allPoints.length - 2);
-    // Default two labels near endpoints
     return [
       { id: 'start', segmentIndex: 0, t: Math.min(0.1, 0.9), side: 'auto' },
       { id: 'end', segmentIndex: lastSeg, t: 0.9, side: 'auto' }
@@ -509,9 +525,10 @@ function ConnectionLine({
     const tangent = normalize(b.x - a.x, b.y - a.y);
     const normal = { x: -tangent.y, y: tangent.x };
 
+    const fontSize = label.fontSize || 12;
+    const orientation = label.orientation || 'horizontal';
     const textWidth = estimateTextWidth(labelText) + 2 * LABEL_PADDING_X;
 
-    // Position label center based on desired side
     let cx = base.x;
     let cy = base.y;
 
@@ -533,7 +550,6 @@ function ConnectionLine({
         break;
       case 'auto':
       default:
-        // Perpendicular to line (left-hand normal). Guarantees 5px from line edge.
         cx = base.x + normal.x * (EDGE_OFFSET + LABEL_HEIGHT / 2);
         cy = base.y + normal.y * (EDGE_OFFSET + LABEL_HEIGHT / 2);
         break;
@@ -564,21 +580,59 @@ function ConnectionLine({
         width: textWidth,
         height: LABEL_HEIGHT,
         fill: 'rgba(0,0,0,0.8)',
-        rx: 3
+        rx: 3,
+        transform: orientation === 'vertical' ? `rotate(-90 ${cx} ${cy})` : undefined
       }),
       React.createElement(
         'text',
         {
           x: cx,
-          y: cy + 4, // rough vertical centering
+          y: cy + 4,
           fill: lineStyle.color,
-          fontSize: 12,
+          fontSize: fontSize,
           textAnchor: 'middle',
-          className: 'font-semibold pointer-events-none'
+          className: 'font-semibold pointer-events-none',
+          transform: orientation === 'vertical' ? `rotate(-90 ${cx} ${cy})` : undefined
         },
         labelText
       )
     );
+  };
+
+  const getSVGRelativePoint = (event) => {
+    const svg = event.currentTarget.ownerSVGElement || event.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    return { x, y };
+  };
+  const distPointToSeg = (px, py, ax, ay, bx, by) => {
+    const abx = bx - ax, aby = by - ay;
+    const apx = px - ax, apy = py - ay;
+    const ab2 = abx * abx + aby * aby || 1;
+    let t = (apx * abx + apy * aby) / ab2;
+    t = Math.max(0, Math.min(1, t));
+    const cx = ax + abx * t;
+    const cy = ay + aby * t;
+    const dx = px - cx, dy = py - cy;
+    return { d2: dx * dx + dy * dy, t, cx, cy };
+  };
+  const findNearestSegment = (pt) => {
+    let best = { idx: 0, d2: Infinity, t: 0, cx: pt.x, cy: pt.y };
+    for (let i = 0; i < allPoints.length - 1; i++) {
+      const a = allPoints[i];
+      const b = allPoints[i + 1];
+      const res = distPointToSeg(pt.x, pt.y, a.x, a.y, b.x, b.y);
+      if (res.d2 < best.d2) best = { idx: i, d2: res.d2, t: res.t, cx: res.cx, cy: res.cy };
+    }
+    return best;
+  };
+  const onPathMouseDown = (e) => {
+    if (!isEditing || !isSelected) return;
+    e.stopPropagation();
+    const pt = getSVGRelativePoint(e);
+    const { idx, cx, cy } = findNearestSegment(pt);
+    onAddWaypoint && onAddWaypoint(connection.id, idx, cx, cy);
   };
 
   return React.createElement(
@@ -590,8 +644,6 @@ function ConnectionLine({
         onConnectionClick && onConnectionClick(connection.id);
       }
     },
-    // Angle hint overlays (only visible while editing & when selected)
-    ...(renderAngleHints() || []),
     React.createElement('path', {
       d: pathD,
       stroke: lineStyle.color,
@@ -599,6 +651,15 @@ function ConnectionLine({
       strokeDasharray,
       fill: 'none'
     }),
+    isEditing && isSelected &&
+      React.createElement('path', {
+        d: pathD,
+        stroke: 'transparent',
+        strokeWidth: Math.max(14, (lineStyle.thickness || 2) * 4),
+        fill: 'none',
+        pointerEvents: 'stroke',
+        onMouseDown: onPathMouseDown
+      }),
     React.createElement('circle', { cx: start.x, cy: start.y, r: 4, fill: lineStyle.color }),
     isEditing &&
       isSelected &&
@@ -665,7 +726,7 @@ function ConnectionLine({
           }
         });
       }),
-    // Labels
+    renderAngleHints(),
     ...(labelsArray || []).map((lbl) => renderLabel(lbl))
   );
 }
@@ -1065,6 +1126,7 @@ function EditPanel({
     onPublish
   }) {
   const [commitMsg, setCommitMsg] = useState('Update data.json from app');
+  
   const addCharacter = () => {
     const newChar = {
       id: Date.now().toString(),
@@ -1114,10 +1176,12 @@ function EditPanel({
       type: Object.keys(data.legend.lines)[0] || 'friendship',
       startSide: 'right',
       endSide: 'left',
+      startOffset: 0.5,
+      endOffset: 0.5,
       waypoints: [],
       labels: [
-        { id: 'start', segmentIndex: 0, t: 0.1, side: 'auto' },
-        { id: 'end', segmentIndex: 0, t: 0.9, side: 'auto' }
+        { id: 'start', segmentIndex: 0, t: 0.1, side: 'auto', orientation: 'horizontal', fontSize: 12 },
+        { id: 'end', segmentIndex: 0, t: 0.9, side: 'auto', orientation: 'horizontal', fontSize: 12 }
       ]
     };
     setData({ ...data, connections: [...data.connections, newConn] });
@@ -1146,7 +1210,6 @@ function EditPanel({
       delete newLegend[category][key];
     } else {
       if (key === null) {
-        // handled externally when symbol keys change
       } else {
         newLegend[category][key] = { ...newLegend[category][key], ...updates };
       }
@@ -1296,7 +1359,6 @@ function EditPanel({
     )
   );
 
-  // Helpers for label section
   const sideOptions = [
     ['auto', 'Auto (perpendicular)'],
     ['top', 'Top'],
@@ -1330,7 +1392,6 @@ function EditPanel({
       )
     ),
 
-    // CANVAS
     activeTab === 'canvas' &&
       React.createElement(
         'div',
@@ -1465,7 +1526,6 @@ function EditPanel({
         )
       ),
 
-    // CHARACTERS
     activeTab === 'characters' &&
       React.createElement(
         'div',
@@ -1749,14 +1809,14 @@ function EditPanel({
                     ['top-left', '↖'],
                     ['top', '↑'],
                     ['top-right', '↗'],
-                    [null, ''], // spacer
+                    [null, ''],
                     ['center', '●'],
-                    [null, ''], // spacer
+                    [null, ''],
                     ['bottom-left', '↙'],
                     ['bottom', '↓'],
                     ['bottom-right', '↘']
                   ].map(([pos, arrow], idx) => {
-                    if (!pos) return React.createElement('div', { key: `spacer-${idx}` }); // Empty spacer
+                    if (!pos) return React.createElement('div', { key: `spacer-${idx}` });
 
                     return React.createElement(
                       'button',
@@ -1845,7 +1905,6 @@ function EditPanel({
           )
       ),
 
-    // CONNECTIONS
     activeTab === 'connections' &&
       React.createElement(
         'div',
@@ -1999,8 +2058,41 @@ function EditPanel({
                   )
                 )
               ),
+              React.createElement(
+                'div',
+                { className: 'grid grid-cols-2 gap-2 mt-2' },
+                React.createElement(
+                  'label',
+                  { className: 'block text-xs' },
+                  `Start Offset: ${Math.round((conn.startOffset ?? 0.5) * 100)}%`,
+                  React.createElement('input', {
+                    type: 'range',
+                    min: 0,
+                    max: 100,
+                    value: (conn.startOffset ?? 0.5) * 100,
+                    onChange: (e) =>
+                      updateConnection(conn.id, { startOffset: parseInt(e.target.value) / 100 }),
+                    onClick: (e) => e.stopPropagation(),
+                    className: 'w-full mt-1'
+                  })
+                ),
+                React.createElement(
+                  'label',
+                  { className: 'block text-xs' },
+                  `End Offset: ${Math.round((conn.endOffset ?? 0.5) * 100)}%`,
+                  React.createElement('input', {
+                    type: 'range',
+                    min: 0,
+                    max: 100,
+                    value: (conn.endOffset ?? 0.5) * 100,
+                    onChange: (e) =>
+                      updateConnection(conn.id, { endOffset: parseInt(e.target.value) / 100 }),
+                    onClick: (e) => e.stopPropagation(),
+                    className: 'w-full mt-1'
+                  })
+                )
+              ),
 
-              // ----- Line Labels management -----
               selectedConnection === conn.id &&
                 React.createElement(
                   'div',
@@ -2039,7 +2131,7 @@ function EditPanel({
                     ? React.createElement(
                         'div',
                         { className: 'text-xs text-gray-300 mb-2' },
-                        'No custom labels yet. Click “Add Label” to create one. (Two default labels still render on the canvas until you customize.)'
+                        'No custom labels yet. Click "Add Label" to create one. (Two default labels still render on the canvas until you customize.)'
                       )
                     : null),
                   ensureLabels(conn).map((lbl) =>
@@ -2048,48 +2140,94 @@ function EditPanel({
                       {
                         key: lbl.id,
                         className:
-                          'flex items-center justify-between gap-2 mb-2 bg-gray-900 px-2 py-2 rounded'
+                          'flex flex-col gap-2 mb-2 bg-gray-900 px-2 py-2 rounded'
                       },
                       React.createElement(
                         'div',
-                        { className: 'text-xs flex-1' },
-                        `${fromChar?.name || 'Unknown'} → ${toChar?.name || 'Unknown'}`
-                      ),
-                      React.createElement(
-                        'label',
-                        { className: 'text-xs flex items-center gap-1' },
-                        'Side:',
+                        { className: 'flex items-center justify-between gap-2' },
                         React.createElement(
-                          'select',
+                          'div',
+                          { className: 'text-xs flex-1' },
+                          `${fromChar?.name || 'Unknown'} → ${toChar?.name || 'Unknown'}`
+                        ),
+                        React.createElement(
+                          'button',
                           {
-                            value: lbl.side || 'auto',
-                            onChange: (e) => {
-                              const updated = ensureLabels(conn).map((l) =>
-                                l.id === lbl.id ? { ...l, side: e.target.value } : l
+                            onClick: (e) => {
+                              e.stopPropagation();
+                              const updated = ensureLabels(conn).filter(
+                                (l) => l.id !== lbl.id
                               );
                               updateConnection(conn.id, { labels: updated });
                             },
-                            className: 'bg-gray-700 rounded px-1 py-0.5 text-xs'
+                            className:
+                              'text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded'
                           },
-                          sideOptions.map(([val, label]) =>
-                            React.createElement('option', { key: val, value: val }, label)
-                          )
+                          'Delete'
                         )
                       ),
                       React.createElement(
-                        'button',
-                        {
-                          onClick: (e) => {
-                            e.stopPropagation();
-                            const updated = ensureLabels(conn).filter(
-                              (l) => l.id !== lbl.id
-                            );
-                            updateConnection(conn.id, { labels: updated });
-                          },
-                          className:
-                            'text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded'
-                        },
-                        'Delete'
+                        'div',
+                        { className: 'grid grid-cols-3 gap-2' },
+                        React.createElement(
+                          'label',
+                          { className: 'text-xs flex flex-col' },
+                          'Side:',
+                          React.createElement(
+                            'select',
+                            {
+                              value: lbl.side || 'auto',
+                              onChange: (e) => {
+                                const updated = ensureLabels(conn).map((l) =>
+                                  l.id === lbl.id ? { ...l, side: e.target.value } : l
+                                );
+                                updateConnection(conn.id, { labels: updated });
+                              },
+                              className: 'bg-gray-700 rounded px-1 py-0.5 text-xs mt-1'
+                            },
+                            sideOptions.map(([val, label]) =>
+                              React.createElement('option', { key: val, value: val }, label)
+                            )
+                          )
+                        ),
+                        React.createElement(
+                          'label',
+                          { className: 'text-xs flex flex-col' },
+                          'Orient:',
+                          React.createElement(
+                            'select',
+                            {
+                              value: lbl.orientation || 'horizontal',
+                              onChange: (e) => {
+                                const updated = ensureLabels(conn).map((l) =>
+                                  l.id === lbl.id ? { ...l, orientation: e.target.value } : l
+                                );
+                                updateConnection(conn.id, { labels: updated });
+                              },
+                              className: 'bg-gray-700 rounded px-1 py-0.5 text-xs mt-1'
+                            },
+                            React.createElement('option', { value: 'horizontal' }, 'Horiz'),
+                            React.createElement('option', { value: 'vertical' }, 'Vert')
+                          )
+                        ),
+                        React.createElement(
+                          'label',
+                          { className: 'text-xs flex flex-col' },
+                          'Font:',
+                          React.createElement('input', {
+                            type: 'number',
+                            value: lbl.fontSize || 12,
+                            onChange: (e) => {
+                              const updated = ensureLabels(conn).map((l) =>
+                                l.id === lbl.id ? { ...l, fontSize: parseInt(e.target.value) || 12 } : l
+                              );
+                              updateConnection(conn.id, { labels: updated });
+                            },
+                            className: 'bg-gray-700 rounded px-1 py-0.5 text-xs mt-1',
+                            min: 8,
+                            max: 24
+                          })
+                        )
                       )
                     )
                   ),
@@ -2097,7 +2235,7 @@ function EditPanel({
                     React.createElement(
                       'div',
                       { className: 'mt-2 text-xs text-gray-400' },
-                      '💡 Drag labels on the canvas to reposition along the line. The “Side” controls where the label sits relative to the line or screen.'
+                      '💡 Drag labels on the canvas to reposition along the line. The "Side" controls where the label sits relative to the line or screen.'
                     )
                 ),
 
@@ -2112,7 +2250,6 @@ function EditPanel({
         )
       ),
 
-    // LEGEND
     activeTab === 'legend' &&
       React.createElement(
         'div',
@@ -2199,7 +2336,6 @@ function EditPanel({
               )
             )
           ),
-          // Add Line Type button
           React.createElement(
             'button',
             {
@@ -2436,7 +2572,6 @@ function EditPanel({
       ),
 
     publishSection,
-    // EXPORT / IMPORT
     React.createElement(
       'div',
       { className: 'mt-4 p-3 bg-gray-800 rounded space-y-2' },
@@ -2470,7 +2605,6 @@ function EditPanel({
 }
 
 function CharacterMapper() {
-  // Initialize data with defaults for canvas size if missing
   const [data, setData] = useState(() => {
     const d = { ...initialData };
     if (!d.canvasWidth) d.canvasWidth = 50;
@@ -2488,14 +2622,147 @@ function CharacterMapper() {
   const [showLegend, setShowLegend] = useState(true);
   const [legendMinimized, setLegendMinimized] = useState(false);
   const [draggingWaypoint, setDraggingWaypoint] = useState(null);
-  const [draggingLabel, setDraggingLabel] = useState(null); // { connId, labelId }
+  const [draggingLabel, setDraggingLabel] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState('canvas');
   const canvasRef = useRef(null);
 
-  // ---- GitHub publish config (editor-only) ----
-const [publishCfg, setPublishCfg] = useState(() => {
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [dragPreview, setDragPreview] = useState(null);
+  const lastSelectedId = useRef(null);
+  
+  const setOnlySelected = (id) => {
+    lastSelectedId.current = id;
+    setSelectedIds(new Set([id]));
+  };
+  
+  const toggleSelected = (id) =>
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  
+  const isSelected = (id) => selectedIds.has(id);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setSelectedIds(new Set(data.characters.map(c => c.id)));
+      }
+      if (e.key === 'Escape') setSelectedIds(new Set());
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [data.characters]);
+
+  const startWindowDrag = (startX, startY, anchorId) => {
+    const DRAG_THRESHOLD = 5;
+    let hasDragged = false;
+
+    const anchorSelected = selectedIds.size && selectedIds.has(anchorId);
+    const anchor = data.characters.find(c => c.id === anchorId);
+    if (!anchor) return;
+
+    const anchorLeft = anchor.gridX * GRID_SIZE;
+    const anchorTop = anchor.gridY * GRID_SIZE;
+    const anchorOffset = { dx: startX - anchorLeft, dy: startY - anchorTop };
+
+    const groupIds = (selectedIds.size && selectedIds.has(anchorId))
+      ? Array.from(selectedIds)
+      : [anchorId];
+
+    const offsets = {};
+    for (const id of groupIds) {
+      const t = data.characters.find(c => c.id === id);
+      if (!t) continue;
+      const left = t.gridX * GRID_SIZE;
+      const top = t.gridY * GRID_SIZE;
+      offsets[id] = { relX: left - anchorLeft, relY: top - anchorTop, startLeft: left, startTop: top };
+    }
+
+    const onMove = (e) => {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      
+      if (!hasDragged && Math.hypot(dx, dy) < DRAG_THRESHOLD) {
+        return;
+      }
+      
+      if (!hasDragged) {
+        hasDragged = true;
+        if (!anchorSelected) setSelectedIds(new Set([anchorId]));
+        setDragPreview({ anchorId, anchorOffset, offsets, render: {} });
+      }
+
+      const baseLeft = e.clientX - anchorOffset.dx;
+      const baseTop = e.clientY - anchorOffset.dy;
+      const render = {};
+      for (const id of groupIds) {
+        const o = offsets[id];
+        const newLeft = baseLeft + o.relX;
+        const newTop = baseTop + o.relY;
+        render[id] = { dx: newLeft - o.startLeft, dy: newTop - o.startTop };
+      }
+      setDragPreview(prev => prev ? { ...prev, render } : null);
+    };
+
+    const onUp = (e) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+
+      if (!hasDragged) {
+        return;
+      }
+
+      const dropLeft = e.clientX - anchorOffset.dx;
+      const dropTop = e.clientY - anchorOffset.dy;
+      let targetGX = Math.floor(dropLeft / GRID_SIZE);
+      let targetGY = Math.floor(dropTop / GRID_SIZE);
+
+      const dxGrid = targetGX - anchor.gridX;
+      const dyGrid = targetGY - anchor.gridY;
+
+      setData(prev => {
+        const ids = new Set(groupIds);
+        const minGX = Math.min(...prev.characters.filter(c => ids.has(c.id)).map(c => c.gridX));
+        const maxGX = Math.max(...prev.characters.filter(c => ids.has(c.id)).map(c => c.gridX));
+        const minGY = Math.min(...prev.characters.filter(c => ids.has(c.id)).map(c => c.gridY));
+        const maxGY = Math.max(...prev.characters.filter(c => ids.has(c.id)).map(c => c.gridY));
+
+        let ddx = dxGrid;
+        let ddy = dyGrid;
+
+        const newMinGX = minGX + ddx;
+        const newMaxGX = maxGX + ddx;
+        const newMinGY = minGY + ddy;
+        const newMaxGY = maxGY + ddy;
+
+        const maxXAllowed = prev.canvasWidth - Math.ceil(TILE_WIDTH / GRID_SIZE);
+        const maxYAllowed = prev.canvasHeight - Math.ceil(TILE_HEIGHT / GRID_SIZE);
+
+        if (newMinGX < 0) ddx += -newMinGX;
+        if (newMinGY < 0) ddy += -newMinGY;
+        if (newMaxGX > maxXAllowed) ddx += (maxXAllowed - newMaxGX);
+        if (newMaxGY > maxYAllowed) ddy += (maxYAllowed - newMaxGY);
+
+        const moved = prev.characters.map(c => {
+          if (!ids.has(c.id)) return c;
+          return { ...c, gridX: c.gridX + ddx, gridY: c.gridY + ddy };
+        });
+        return { ...prev, characters: moved };
+      });
+
+      setDragPreview(null);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const [publishCfg, setPublishCfg] = useState(() => {
     try {
       const raw = localStorage.getItem('ghPublishConfig');
       return raw ? JSON.parse(raw) : { owner: '', repo: '', branch: 'main', path: 'data.json', token: '' };
@@ -2503,12 +2770,12 @@ const [publishCfg, setPublishCfg] = useState(() => {
       return { owner: '', repo: '', branch: 'main', path: 'data.json', token: '' };
     }
   });
+  
   const savePublishCfg = (cfg) => {
     setPublishCfg(cfg);
     try { localStorage.setItem('ghPublishConfig', JSON.stringify(cfg)); } catch {}
   };
-  
-  // Helper to base64-encode UTF-8 safely
+
   const b64encodeUTF8 = (str) => {
     try {
       return btoa(unescape(encodeURIComponent(str)));
@@ -2520,8 +2787,7 @@ const [publishCfg, setPublishCfg] = useState(() => {
       return btoa(binary);
     }
   };
-  
-  // Load data.json from the site (shared for all viewers)
+
   const loadFromRemoteJson = async () => {
     try {
       const resp = await fetch(`data.json?v=${Date.now()}`, { cache: 'no-store' });
@@ -2536,8 +2802,7 @@ const [publishCfg, setPublishCfg] = useState(() => {
       console.warn('[v4] Failed to fetch data.json', e);
     }
   };
-  
-  // Publish current data to GitHub (updates data.json on your repo)
+
   const publishToGitHub = async (message = 'Update data.json from app') => {
     const { owner, repo, branch, path, token } = publishCfg || {};
     if (!owner || !repo || !path || !token) {
@@ -2550,8 +2815,7 @@ const [publishCfg, setPublishCfg] = useState(() => {
       'Accept': 'application/vnd.github+json',
       'Authorization': `Bearer ${token}`
     };
-  
-    // Get current file SHA (for update) if it exists
+
     let sha = undefined;
     try {
       const getResp = await fetch(`${contentUrl}?ref=${encodeURIComponent(branch || 'main')}`, { headers });
@@ -2565,14 +2829,14 @@ const [publishCfg, setPublishCfg] = useState(() => {
     } catch (e) {
       console.warn('Could not retrieve existing file metadata:', e);
     }
-  
+
     const body = {
       message: message || 'Update data.json from app',
       content: b64encodeUTF8(JSON.stringify(data, null, 2)),
       branch: branch || 'main'
     };
     if (sha) body.sha = sha;
-  
+
     try {
       const putResp = await fetch(contentUrl, {
         method: 'PUT',
@@ -2591,74 +2855,68 @@ const [publishCfg, setPublishCfg] = useState(() => {
     }
   };
 
-  // ---- Persistence (v3): Autosave to localStorage and restore on load ----
-const STORAGE_KEY = 'character-map-builder.v3';
+  const STORAGE_KEY = 'character-map-builder.v3';
 
-const normalizeData = (d) => {
-  const cloned = { ...d };
-  if (!cloned.canvasWidth) cloned.canvasWidth = 50;
-  if (!cloned.canvasHeight) cloned.canvasHeight = 40;
-  if (!cloned.legend) cloned.legend = { alignments: {}, relationships: {}, sects: {}, statusSymbols: {} };
-  if (!cloned.legend.sects) cloned.legend.sects = {};
-  if (!cloned.legend.statusSymbols) cloned.legend.statusSymbols = {};
-  if (!Array.isArray(cloned.characters)) cloned.characters = [];
-  if (!Array.isArray(cloned.connections)) cloned.connections = [];
-  cloned.characters = cloned.characters.map((c) => ({
-    imagePosition: 'center',
-    ...c,
-    imagePosition: c.imagePosition || 'center'
-  }));
-  return cloned;
-};
+  const normalizeData = (d) => {
+    const cloned = { ...d };
+    if (!cloned.canvasWidth) cloned.canvasWidth = 50;
+    if (!cloned.canvasHeight) cloned.canvasHeight = 40;
+    if (!cloned.legend) cloned.legend = { alignments: {}, relationships: {}, sects: {}, statusSymbols: {} };
+    if (!cloned.legend.sects) cloned.legend.sects = {};
+    if (!cloned.legend.statusSymbols) cloned.legend.statusSymbols = {};
+    if (!Array.isArray(cloned.characters)) cloned.characters = [];
+    if (!Array.isArray(cloned.connections)) cloned.connections = [];
+    cloned.characters = cloned.characters.map((c) => ({
+      imagePosition: 'center',
+      ...c,
+      imagePosition: c.imagePosition || 'center'
+    }));
+    return cloned;
+  };
 
-const saveToStorage = (payload = data) => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    console.log('[v3] Saved to localStorage');
-  } catch (e) {
-    console.warn('Failed to save to localStorage', e);
-  }
-};
-
-const loadFromStorage = () => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      setData(normalizeData(parsed));
-      console.log('[v3] Loaded saved data from localStorage');
+  const saveToStorage = (payload = data) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      console.log('[v3] Saved to localStorage');
+    } catch (e) {
+      console.warn('Failed to save to localStorage', e);
     }
-  } catch (e) {
-    console.warn('Failed to load from localStorage', e);
-  }
-};
+  };
 
-// Load once on mount
-useEffect(() => {
+  const loadFromStorage = () => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setData(normalizeData(parsed));
+        console.log('[v3] Loaded saved data from localStorage');
+      }
+    } catch (e) {
+      console.warn('Failed to load from localStorage', e);
+    }
+  };
+
+  useEffect(() => {
     const hasLocal = !!localStorage.getItem(STORAGE_KEY);
     loadFromStorage();
     if (!hasLocal) {
-      // If the viewer has no local draft, load shared data.json
       loadFromRemoteJson();
     }
   }, []);
 
-// When leaving edit mode, persist immediately
-useEffect(() => {
-  if (!isEditing) saveToStorage(data);
-}, [isEditing]);
+  useEffect(() => {
+    if (!isEditing) saveToStorage(data);
+  }, [isEditing]);
 
-// Safety: also save on unload
-useEffect(() => {
-  const handleBeforeUnload = () => saveToStorage(data);
-  window.addEventListener('beforeunload', handleBeforeUnload);
-  return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-}, [data]);
+  useEffect(() => {
+    const handleBeforeUnload = () => saveToStorage(data);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [data]);
 
-// Optional manual helpers for the console:
-const manualSave = () => saveToStorage(data);
-window.cmSave = manualSave;
-window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
+  const manualSave = () => saveToStorage(data);
+  window.cmSave = manualSave;
+  window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
 
   const handleDragStart = (e, character) => {
     if (!isEditing) return;
@@ -2676,7 +2934,6 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
     const gridX = Math.round(x / GRID_SIZE);
     const gridY = Math.round(y / GRID_SIZE);
 
-    // Clamp to canvas bounds
     const clampedX = Math.max(0, Math.min(gridX, canvasWidth - 1));
     const clampedY = Math.max(0, Math.min(gridY, canvasHeight - 1));
 
@@ -2697,19 +2954,32 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
     setDraggingWaypoint({ connId, wpIndex });
   };
 
-  // --- Connection geometry helpers (shared by label drag and migration) ---
-  const getConnectionPointForChar = (char, side) => {
+  const getConnectionPointForChar = (char, side, offset = 0.5) => {
     const baseX = char.gridX * GRID_SIZE + TILE_WIDTH / 2;
     const baseY = char.gridY * GRID_SIZE + TILE_HEIGHT / 2;
+    const clampedOffset = Math.max(0, Math.min(1, offset));
+    
     switch (side) {
       case 'top':
-        return { x: baseX, y: char.gridY * GRID_SIZE };
+        return { 
+          x: char.gridX * GRID_SIZE + TILE_WIDTH * clampedOffset, 
+          y: char.gridY * GRID_SIZE 
+        };
       case 'bottom':
-        return { x: baseX, y: char.gridY * GRID_SIZE + TILE_HEIGHT };
+        return { 
+          x: char.gridX * GRID_SIZE + TILE_WIDTH * clampedOffset, 
+          y: char.gridY * GRID_SIZE + TILE_HEIGHT 
+        };
       case 'left':
-        return { x: char.gridX * GRID_SIZE, y: baseY };
+        return { 
+          x: char.gridX * GRID_SIZE, 
+          y: char.gridY * GRID_SIZE + TILE_HEIGHT * clampedOffset 
+        };
       case 'right':
-        return { x: char.gridX * GRID_SIZE + TILE_WIDTH, y: baseY };
+        return { 
+          x: char.gridX * GRID_SIZE + TILE_WIDTH, 
+          y: char.gridY * GRID_SIZE + TILE_HEIGHT * clampedOffset 
+        };
       default:
         return { x: baseX, y: baseY };
     }
@@ -2719,28 +2989,24 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
     const fromChar = _data.characters.find((c) => c.id === conn.from);
     const toChar = _data.characters.find((c) => c.id === conn.to);
     if (!fromChar || !toChar) return [];
-    const start = getConnectionPointForChar(fromChar, conn.startSide || 'right');
-    const end = getConnectionPointForChar(toChar, conn.endSide || 'left');
+    const start = getConnectionPointForChar(fromChar, conn.startSide || 'right', conn.startOffset ?? 0.5);
+    const end = getConnectionPointForChar(toChar, conn.endSide || 'left', conn.endOffset ?? 0.5);
     return [start, ...(conn.waypoints || []), end];
   };
 
   const projectPointToSegment = (px, py, ax, ay, bx, by) => {
-    const abx = bx - ax,
-      aby = by - ay;
-    const apx = px - ax,
-      apy = py - ay;
+    const abx = bx - ax, aby = by - ay;
+    const apx = px - ax, apy = py - ay;
     const ab2 = abx * abx + aby * aby || 1;
     let t = (apx * abx + apy * aby) / ab2;
     t = Math.max(0, Math.min(1, t));
     const cx = ax + abx * t;
     const cy = ay + aby * t;
-    const dx = px - cx,
-      dy = py - cy;
+    const dx = px - cx, dy = py - cy;
     const dist2 = dx * dx + dy * dy;
     return { t, cx, cy, dist2 };
   };
 
-  // Ensure a connection has labels (migrate defaults) – used on selection & on label drag start
   const ensureConnectionLabels = (connId, seedIds = ['start', 'end']) => {
     const conn = data.connections.find((c) => c.id === connId);
     if (!conn) return;
@@ -2763,7 +3029,6 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
   const handleLabelDragStart = (connId, labelId, e) => {
     if (!isEditing) return;
     e.preventDefault();
-    // Migrate defaults into state if missing; preserve the same ids so drag can target them
     ensureConnectionLabels(connId, ['start', 'end']);
     setDraggingLabel({ connId, labelId });
   };
@@ -2803,14 +3068,12 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
 
           let best = { segmentIndex: 0, t: 0.5, dist2: Infinity };
           for (let i = 0; i < pts.length - 1; i++) {
-            const p0 = pts[i],
-              p1 = pts[i + 1];
+            const p0 = pts[i], p1 = pts[i + 1];
             const proj = projectPointToSegment(px, py, p0.x, p0.y, p1.x, p1.y);
             if (proj.dist2 < best.dist2)
               best = { segmentIndex: i, t: proj.t, dist2: proj.dist2 };
           }
 
-          // Ensure labels array exists
           const labels = (conn.labels && [...conn.labels]) || [
             { id: 'start', segmentIndex: 0, t: 0.1, side: 'auto' },
             { id: 'end', segmentIndex: Math.max(0, pts.length - 2), t: 0.9, side: 'auto' }
@@ -2863,7 +3126,6 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
       setShowAuthModal(true);
     } else {
       if (isEditing) {
-        // leaving edit mode -> persist changes
         saveToStorage(data);
       }
       setIsEditing(!isEditing);
@@ -2873,7 +3135,6 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
   const canvasWidth = data.canvasWidth || 10;
   const canvasHeight = data.canvasHeight || 8;
 
-  // Search functionality
   const matchesSearch = (character) => {
     if (!searchQuery.trim()) return true;
     const query = searchQuery.toLowerCase();
@@ -2893,16 +3154,13 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
 
   const matchingCharacters = data.characters.filter(matchesSearch);
   const hasSearchResults = searchQuery.trim() !== '';
-  const searchResultCount = matchingCharacters.length;
 
-  // When selecting a connection in edit mode, make sure it has labels so the panel can manage them.
   useEffect(() => {
     if (!isEditing || !selectedConnection) return;
     const conn = data.connections.find((c) => c.id === selectedConnection);
     if (conn && (!conn.labels || conn.labels.length === 0)) {
       ensureConnectionLabels(conn.id);
     }
-    // eslint-disable-next-line
   }, [selectedConnection, isEditing]);
 
   useEffect(() => {
@@ -2923,22 +3181,20 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
       isAuthenticated &&
       React.createElement(
         'div',
-        {
-          className: 'w-80 border-r border-gray-700'
-        },
+        { className: 'w-80 border-r border-gray-700' },
         React.createElement(EditPanel, {
-            data,
-            setData,
-            selectedCharacter,
-            setSelectedCharacter,
-            selectedConnection,
-            setSelectedConnection,
-            activeTab,
-            setActiveTab,
-            publishCfg,
-            savePublishCfg,
-            onPublish: publishToGitHub
-          })
+          data,
+          setData,
+          selectedCharacter,
+          setSelectedCharacter,
+          selectedConnection,
+          setSelectedConnection,
+          activeTab,
+          setActiveTab,
+          publishCfg,
+          savePublishCfg,
+          onPublish: publishToGitHub
+        })
       ),
     React.createElement(
       'div',
@@ -2946,9 +3202,7 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
       showLegend &&
         React.createElement(
           'div',
-          {
-            className: 'p-4 bg-gray-950'
-          },
+          { className: 'p-4 bg-gray-950' },
           React.createElement(Legend, {
             legend: data.legend,
             isMinimized: legendMinimized,
@@ -2961,55 +3215,54 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
         React.createElement(
           'div',
           { className: 'absolute top-4 right-4 z-10 flex gap-2 items-center' },
-          !isEditing &&
-            (searchExpanded
-              ? React.createElement(
-                  'div',
-                  {
-                    className:
-                      'flex items-center gap-2 bg-gray-800 rounded-lg shadow-lg border border-gray-700 px-3 py-2'
-                  },
-                  React.createElement('span', { className: 'text-white text-sm' }, '🔍'),
-                  React.createElement('input', {
-                    type: 'text',
-                    value: searchQuery,
-                    onChange: (e) => setSearchQuery(e.target.value),
-                    placeholder: 'Search anything',
-                    className:
-                      'w-48 bg-gray-700 text-white px-2 py-1 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500',
-                    autoFocus: true
-                  }),
-                  searchQuery &&
-                    React.createElement(
-                      'button',
-                      {
-                        onClick: () => setSearchQuery(''),
-                        className: 'text-gray-400 hover:text-white text-xs'
-                      },
-                      '✖️'
-                    ),
+          (searchExpanded
+            ? React.createElement(
+                'div',
+                {
+                  className:
+                    'flex items-center gap-2 bg-gray-800 rounded-lg shadow-lg border border-gray-700 px-3 py-2'
+                },
+                React.createElement('span', { className: 'text-white text-sm' }, '🔍'),
+                React.createElement('input', {
+                  type: 'text',
+                  value: searchQuery,
+                  onChange: (e) => setSearchQuery(e.target.value),
+                  placeholder: 'Search anything',
+                  className:
+                    'w-48 bg-gray-700 text-white px-2 py-1 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500',
+                  autoFocus: true
+                }),
+                searchQuery &&
                   React.createElement(
                     'button',
                     {
-                      onClick: () => {
-                        setSearchExpanded(false);
-                        setSearchQuery('');
-                      },
-                      className: 'text-gray-400 hover:text-white text-sm ml-1'
+                      onClick: () => setSearchQuery(''),
+                      className: 'text-gray-400 hover:text-white text-xs'
                     },
-                    '◀'
-                  )
-                )
-              : React.createElement(
+                    '✖️'
+                  ),
+                React.createElement(
                   'button',
                   {
-                    onClick: () => setSearchExpanded(true),
-                    className:
-                      'bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-gray-700 transition flex items-center gap-2 text-sm',
-                    title: 'Search characters'
+                    onClick: () => {
+                      setSearchExpanded(false);
+                      setSearchQuery('');
+                    },
+                    className: 'text-gray-400 hover:text-white text-sm ml-1'
                   },
-                  '🔍'
-                )),
+                  '◀'
+                )
+              )
+            : React.createElement(
+                'button',
+                {
+                  onClick: () => setSearchExpanded(true),
+                  className:
+                    'bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-gray-700 transition flex items-center gap-2 text-sm',
+                  title: 'Search characters'
+                },
+                '🔍'
+              )),
           React.createElement(
             'button',
             {
@@ -3033,12 +3286,12 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
         ),
         React.createElement(
           'div',
-          { className: 'overflow-auto h-screen p-8' },
+          { className: 'overflow-auto h-screen p-8 bg-gray-900' },
           React.createElement(
             'div',
             {
               ref: canvasRef,
-              className: 'relative bg-gray-900',
+              className: 'relative',
               style: {
                 width: canvasWidth * GRID_SIZE,
                 height: canvasHeight * GRID_SIZE,
@@ -3052,9 +3305,7 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
             },
             React.createElement(
               'svg',
-              {
-                className: 'absolute inset-0 w-full h-full pointer-events-none'
-              },
+              { className: 'absolute inset-0 w-full h-full pointer-events-none' },
               React.createElement(
                 'g',
                 { className: 'pointer-events-auto' },
@@ -3084,26 +3335,37 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
             ),
             data.characters.map((char) => {
               const isMatch = matchesSearch(char);
-              const sectColor =
-                char.sect && data.legend.sects?.[char.sect]?.color;
+              const sectColor = char.sect && data.legend.sects?.[char.sect]?.color;
               return React.createElement(CharacterTile, {
                 key: char.id,
                 character: char,
-                onClick: () => {
-                  if (!isEditing) {
-                    setModalCharacter(char);
-                    return;
-                  }
-                  // Edit Mode: open Characters tab with this selection
-                  setSelectedConnection(null);
-                  setSelectedCharacter(char);
-                  setActiveTab('characters');
-                },
+                onClick: !isEditing ? () => {
+                  setModalCharacter(char);
+                } : undefined,
                 isEditing,
                 onDragStart: (e) => handleDragStart(e, char),
+                onMouseDownStart: (e) => {
+                  if (!isEditing || e.button !== 0) return;
+                  e.stopPropagation();
+                  if (!selectedIds.has(char.id)) {
+                    if (!(e.shiftKey || e.ctrlKey || e.metaKey)) {
+                      setSelectedIds(new Set([char.id]));
+                    }
+                  }
+                  startWindowDrag(e.clientX, e.clientY, char.id);
+                },
                 isHighlighted: hasSearchResults && isMatch,
                 isDimmed: hasSearchResults && !isMatch,
-                sectColor
+                sectColor,
+                isSelected: isSelected(char.id),
+                onPrimarySelect: isEditing ? () => {
+                  setOnlySelected(char.id);
+                  setSelectedCharacter(char);
+                  setSelectedConnection(null);
+                  setActiveTab('characters');
+                } : undefined,
+                onToggleSelect: isEditing ? () => toggleSelected(char.id) : undefined,
+                dragOffset: (dragPreview && dragPreview.render && dragPreview.render[char.id]) || null
               });
             })
           )
@@ -3129,6 +3391,5 @@ window.cmClear = () => localStorage.removeItem(STORAGE_KEY);
   );
 }
 
-// Initialize the app
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(React.createElement(CharacterMapper));
